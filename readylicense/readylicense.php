@@ -1,28 +1,28 @@
 <?php
 /**
  * Plugin Name:       ReadyLicense
- * Plugin URI:        https://readylicense.com
- * Description:       سامانه جامع و پیشرفته مدیریت لایسنس محصولات دیجیتال (نسخه حرفه‌ای و سازمانی).
- * Version:           2.0.0
+ * Plugin URI:        https://readystudio.ir/readylicense/
+ * Description:       سامانه جامع مدیریت لایسنس، محافظت از کد و فروش محصولات دیجیتال در ووکامرس (نسخه حرفه‌ای).
+ * Version:           2.0.1
  * Author:            ReadyStudio
- * Author URI:        https://readystudio.com
+ * Author URI:        https://readystudio.ir
  * Text Domain:       readylicense
  * Domain Path:       /languages
  * Requires at least: 5.8
  * Requires PHP:      7.4
  */
 
-// امنیت: جلوگیری از دسترسی مستقیم به فایل
+// جلوگیری از دسترسی مستقیم برای امنیت
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
 /**
  * کلاس اصلی افزونه ReadyLicense
- * * این کلاس مسئول راه‌اندازی تمام اجزای سیستم، مدیریت وابستگی‌ها و
- * اطمینان از اجرای صحیح افزونه در محیط وردپرس است.
+ * پیاده‌سازی شده با الگوی Singleton برای اطمینان از پایداری و بهینگی مصرف حافظه.
  *
- * @since 2.0.0
+ * @package ReadyLicense
+ * @since 2.0.1
  */
 final class ReadyLicense {
 
@@ -30,7 +30,7 @@ final class ReadyLicense {
 	 * نسخه فعلی افزونه
 	 * @var string
 	 */
-	public $version = '2.0.0';
+	public $version = '2.0.1';
 
 	/**
 	 * نمونه یگانه کلاس (Singleton Instance)
@@ -40,9 +40,9 @@ final class ReadyLicense {
 
 	/**
 	 * دسترسی به نمونه اصلی کلاس
+	 * این متد تضمین می‌کند که تنها یک نمونه از این کلاس در کل طول عمر اجرای اسکریپت وجود داشته باشد.
 	 *
-	 * این متد تضمین می‌کند که تنها یک نمونه از این کلاس در حافظه وجود دارد.
-	 * * @return ReadyLicense
+	 * @return ReadyLicense
 	 */
 	public static function instance() {
 		if ( is_null( self::$_instance ) ) {
@@ -52,8 +52,8 @@ final class ReadyLicense {
 	}
 
 	/**
-	 * سازنده کلاس (Constructor)
-	 * اجرای فرآیندهای اولیه هنگام بارگذاری افزونه.
+	 * سازنده کلاس
+	 * اجرای متدهای راه‌اندازی به ترتیب اولویت و وابستگی.
 	 */
 	public function __construct() {
 		$this->define_constants();
@@ -63,57 +63,59 @@ final class ReadyLicense {
 	}
 
 	/**
-	 * تعریف ثابت‌های سراسری افزونه
-	 * استفاده از ثابت‌ها برای جلوگیری از هاردکد کردن مسیرها.
+	 * تعریف ثابت‌های سراسری
+	 * استفاده از ثابت‌ها برای جلوگیری از هاردکد کردن مسیرها و لینک‌ها.
 	 */
 	private function define_constants() {
-		$upload_dir = wp_upload_dir();
-
 		define( 'RL_VERSION', $this->version );
 		define( 'RL_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 		define( 'RL_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 		define( 'RL_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 		define( 'RL_API_NAMESPACE', 'readylicense/v1' ); // فضای نام API
+		
+		// لینک‌های پشتیبانی و مستندات طبق درخواست شما
+		define( 'RL_DOCS_URL', 'https://readystudio.ir/readylicense/doc' );
+		define( 'RL_SUPPORT_URL', 'https://readystudio.ir/support' );
 	}
 
 	/**
-	 * فراخوانی و بارگذاری فایل‌های هسته
-	 * ترتیب بارگذاری فایل‌ها بر اساس وابستگی‌ها بسیار مهم است.
+	 * بارگذاری فایل‌های هسته و کلاس‌ها
+	 * فایل‌ها فقط زمانی که نیاز باشند لود می‌شوند (Performance Tuning).
 	 */
 	private function includes() {
 		/**
-		 * 1. توابع کمکی و ابزارهای پایه
-		 * این فایل شامل توابع گلوبال برای کار با دیتابیس و لایسنس‌ها است.
+		 * 1. توابع کمکی (Helper Functions)
+		 * توابعی که در سراسر افزونه (ادمین و فرانت) استفاده می‌شوند.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/rl-functions.php';
 
 		/**
-		 * 2. مدیریت فعال‌سازی و دیتابیس
-		 * شامل کلاس‌هایی برای ساخت جداول و مدیریت نسخه‌ها.
+		 * 2. کلاس فعال‌سازی (Activator)
+		 * مدیریت ساخت جداول دیتابیس و به‌روزرسانی‌ها.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-activator.php';
 
 		/**
-		 * 3. هسته API (REST API)
-		 * برای ارتباط امن با سایت‌های مشتریان.
+		 * 3. هسته API (REST API Handler)
+		 * مدیریت درخواست‌های از راه دور برای چک کردن لایسنس.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-api.php';
 
 		/**
 		 * 4. مدیریت درخواست‌های AJAX
-		 * برای پردازش درخواست‌های ناهمگام در پنل ادمین و کاربری.
+		 * پردازش عملیات بدون رفرش (مثل تولید لایسنس، مدیریت دامین).
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-ajax.php';
 
 		/**
 		 * 5. کلاس‌های سمت کاربر (Frontend)
-		 * مدیریت نمایش در حساب کاربری ووکامرس.
+		 * مدیریت نمایش تب لایسنس‌ها در حساب کاربری ووکامرس.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-frontend.php';
 
 		/**
 		 * 6. کلاس‌های سمت مدیریت (Admin)
-		 * فقط در محیط ادمین بارگذاری می‌شوند تا سربار کاهش یابد.
+		 * فقط در محیط ادمین بارگذاری می‌شوند تا سربار سرور کاهش یابد.
 		 */
 		if ( is_admin() ) {
 			require_once RL_PLUGIN_DIR . 'includes/class-rl-admin.php';
@@ -121,20 +123,20 @@ final class ReadyLicense {
 	}
 
 	/**
-	 * نمونه‌سازی کلاس‌های اصلی
-	 * اجرای منطق برنامه بعد از لود شدن فایل‌ها.
+	 * نمونه‌سازی کلاس‌های منطقی
+	 * این بخش موتورهای داخلی افزونه را روشن می‌کند.
 	 */
 	private function instantiate_classes() {
-		// راه‌اندازی API
+		// راه‌اندازی مسیرهای API (همیشه باید اجرا شود تا 404 ندهد)
 		new ReadyLicense_API();
 
-		// راه‌اندازی AJAX Handler
+		// راه‌اندازی هندلر AJAX (برای پردازش درخواست‌های ناهمگام)
 		new ReadyLicense_Ajax();
 
-		// راه‌اندازی Frontend Logic
+		// راه‌اندازی بخش کاربری (My Account)
 		new ReadyLicense_Frontend();
 
-		// راه‌اندازی Admin Logic (فقط در ادمین)
+		// راه‌اندازی بخش ادمین (فقط در پنل مدیریت)
 		if ( is_admin() ) {
 			new ReadyLicense_Admin();
 		}
@@ -153,13 +155,14 @@ final class ReadyLicense {
 		// بارگذاری استایل‌ها و اسکریپت‌های فرانت‌اند
 		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_frontend_assets' ] );
 
-		// هوک‌های چرخه حیات افزونه (فعال‌سازی / غیرفعال‌سازی)
+		// هوک‌های چرخه حیات افزونه (نصب / حذف)
+		// این هوک‌ها کلاس Activator را صدا می‌زنند تا جداول دیتابیس ساخته شود
 		register_activation_hook( __FILE__, [ 'ReadyLicense_Activator', 'activate' ] );
 		register_deactivation_hook( __FILE__, [ 'ReadyLicense_Activator', 'deactivate' ] );
 	}
 
 	/**
-	 * بارگذاری فایل‌های ترجمه (.mo / .po)
+	 * بارگذاری تکست‌دامین برای ترجمه
 	 */
 	public function load_textdomain() {
 		load_plugin_textdomain(
@@ -171,15 +174,15 @@ final class ReadyLicense {
 
 	/**
 	 * بارگذاری دارایی‌های سمت مدیریت (CSS/JS)
-	 * به صورت هوشمند فقط در صفحات مربوط به افزونه بارگذاری می‌شود.
+	 * فقط در صفحه مربوط به ReadyLicense اجرا می‌شود تا تداخل ایجاد نکند.
 	 */
 	public function enqueue_admin_assets( $hook ) {
-		// بررسی دقیق صفحه جاری برای جلوگیری از تداخل با سایر افزونه‌ها
+		// فقط در صفحه خود افزونه لود شو! (برای جلوگیری از کندی پیشخوان)
 		if ( strpos( $hook, 'readylicense' ) === false ) {
 			return;
 		}
 
-		// استایل‌های متریال دیزاین پنل ادمین
+		// استایل‌های ادمین (نسخه جدید و بهینه)
 		wp_enqueue_style( 
 			'rl-admin-css', 
 			RL_PLUGIN_URL . 'assets/css/admin-styles.css', 
@@ -187,7 +190,7 @@ final class ReadyLicense {
 			RL_VERSION 
 		);
 
-		// اسکریپت‌های پنل ادمین
+		// اسکریپت‌های ادمین
 		wp_enqueue_script( 
 			'rl-admin-js', 
 			RL_PLUGIN_URL . 'assets/js/admin-scripts.js', 
@@ -196,35 +199,36 @@ final class ReadyLicense {
 			true 
 		);
 
-		// ارسال متغیرها به JS برای استفاده در AJAX
+		// ارسال داده‌ها به JS (برای AJAX و ترجمه‌ها)
+		// این آبجکت rl_obj در فایل admin-scripts.js استفاده می‌شود
 		wp_localize_script( 'rl-admin-js', 'rl_obj', [
 			'ajax_url' => admin_url( 'admin-ajax.php' ),
-			'nonce'    => wp_create_nonce( 'rl_admin_nonce' ), // Nonce امنیتی اختصاصی ادمین
+			'nonce'    => wp_create_nonce( 'rl_admin_nonce' ),
 			'strings'  => [
 				'success' => __( 'عملیات با موفقیت انجام شد.', 'readylicense' ),
-				'error'   => __( 'خطایی رخ داد. لطفاً مجدداً تلاش کنید.', 'readylicense' ),
+				'error'   => __( 'خطایی رخ داد. لطفاً دوباره تلاش کنید.', 'readylicense' ),
 				'loading' => __( 'در حال پردازش...', 'readylicense' ),
-				'confirm' => __( 'آیا از انجام این عملیات اطمینان دارید؟', 'readylicense' )
+				'copied'  => __( 'کپی شد!', 'readylicense' )
 			]
 		]);
 	}
 
 	/**
 	 * بارگذاری دارایی‌های سمت کاربر (CSS/JS)
-	 * فقط در حساب کاربری ووکامرس یا صفحاتی که شورت‌کد دارند.
+	 * فقط در صفحات حساب کاربری ووکامرس یا صفحاتی که شورت‌کد دارند.
 	 */
 	public function enqueue_frontend_assets() {
 		global $post;
 
+		// شرط هوشمند برای لود اسکریپت‌ها
 		$is_account_page = function_exists('is_account_page') && is_account_page();
 		$has_shortcode   = is_a( $post, 'WP_Post' ) && has_shortcode( $post->post_content, 'ready_license_dashboard' );
 
-		// اگر در صفحه مرتبط نیستیم، هیچ فایلی لود نشود (افزایش سرعت سایت)
 		if ( ! $is_account_page && ! $has_shortcode ) {
 			return;
 		}
 
-		// استایل‌های داشبورد کاربری
+		// استایل‌های فرانت
 		wp_enqueue_style( 
 			'rl-front-css', 
 			RL_PLUGIN_URL . 'assets/css/style.css', 
@@ -232,7 +236,7 @@ final class ReadyLicense {
 			RL_VERSION 
 		);
 
-		// اسکریپت‌های داشبورد کاربری
+		// اسکریپت‌های فرانت
 		wp_enqueue_script( 
 			'rl-user-js', 
 			RL_PLUGIN_URL . 'assets/js/user-script.js', 
@@ -241,36 +245,36 @@ final class ReadyLicense {
 			true 
 		);
 		
-		// ارسال متغیرها به JS فرانت‌اند
+		// ارسال داده‌ها به JS فرانت
+		// این آبجکت rl_front در فایل user-script.js استفاده می‌شود
 		wp_localize_script( 'rl-user-js', 'rl_front', [
 			'ajax_url' => admin_url( 'admin-ajax.php' ),
-			'nonce'    => wp_create_nonce( 'rl_user_nonce' ), // Nonce امنیتی اختصاصی کاربر
+			'nonce'    => wp_create_nonce( 'rl_user_nonce' ),
 			'strings'  => [
 				'copied' => __( 'کپی شد!', 'readylicense' ),
-				'error'  => __( 'خطا در ارتباط با سرور.', 'readylicense' )
+				'error'  => __( 'ارتباط با سرور برقرار نشد.', 'readylicense' )
 			]
 		]);
 	}
 
 	/**
-	 * جلوگیری از کلون کردن کلاس (Singleton Protection)
+	 * جلوگیری از کلون شدن کلاس (Singleton Protection)
 	 */
 	public function __clone() {
-		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '1.0' );
+		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '2.0.1' );
 	}
 
 	/**
-	 * جلوگیری از unserialize کردن کلاس (Singleton Protection)
+	 * جلوگیری از Unserialize شدن کلاس (Singleton Protection)
 	 */
 	public function __wakeup() {
-		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '1.0' );
+		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '2.0.1' );
 	}
 }
 
 /**
- * تابع سراسری برای دسترسی آسان به نمونه کلاس
- * توسعه‌دهندگان می‌توانند از RL() برای هوک زدن یا دریافت اطلاعات استفاده کنند.
- * * @return ReadyLicense
+ * تابع دسترسی سریع به نمونه کلاس
+ * @return ReadyLicense
  */
 function RL() {
 	return ReadyLicense::instance();

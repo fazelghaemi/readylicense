@@ -1,6 +1,6 @@
 <?php
 /**
- * مدیریت API های REST برای ارتباط با سایت‌های مشتریان
+ * مدیریت REST API برای اتصال از راه دور
  *
  * @package ReadyLicense
  */
@@ -13,6 +13,7 @@ class ReadyLicense_API {
 
 	/**
 	 * فضای نام API
+	 * این قسمت باید با آدرس درخواستی شما هماهنگ باشد: wp-json/readylicense/v1
 	 */
 	const NAMESPACE = 'readylicense/v1';
 
@@ -29,13 +30,15 @@ class ReadyLicense_API {
 	public function register_routes() {
 		
 		// 1. بررسی وضعیت لایسنس (Check)
+		// آدرس: POST /wp-json/readylicense/v1/check
 		register_rest_route( self::NAMESPACE, '/check', [
 			'methods'             => 'POST',
 			'callback'            => [ $this, 'check_license' ],
-			'permission_callback' => '__return_true', // امنیت داخل تابع بررسی می‌شود
+			'permission_callback' => '__return_true', // عمومی است چون سایت مشتری کوکی ادمین ندارد
 		] );
 
 		// 2. فعال‌سازی لایسنس (Activate)
+		// آدرس: POST /wp-json/readylicense/v1/activate
 		register_rest_route( self::NAMESPACE, '/activate', [
 			'methods'             => 'POST',
 			'callback'            => [ $this, 'activate_license' ],
@@ -43,6 +46,7 @@ class ReadyLicense_API {
 		] );
 
 		// 3. غیرفعال‌سازی لایسنس (Deactivate)
+		// آدرس: POST /wp-json/readylicense/v1/deactivate
 		register_rest_route( self::NAMESPACE, '/deactivate', [
 			'methods'             => 'POST',
 			'callback'            => [ $this, 'deactivate_license' ],
@@ -52,29 +56,38 @@ class ReadyLicense_API {
 
 	/**
 	 * متد: بررسی وضعیت لایسنس
-	 * این متد توسط قالب/افزونه در سایت مشتری هر ۲۴ ساعت یکبار صدا زده می‌شود.
+	 * پارامترها: license_key, domain
 	 */
 	public function check_license( $request ) {
 		$params = $request->get_params();
+		
+		// پشتیبانی از هر دو حالت ارسال (JSON Body یا Form Data)
 		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
 		$domain      = esc_url_raw( $params['domain'] ?? '' );
 
+		// 1. بررسی پارامترها
 		if ( empty( $license_key ) || empty( $domain ) ) {
-			return $this->error( 'missing_params', 'پارامترهای ضروری ارسال نشده‌اند.' );
+			return $this->response( false, 'missing_params', 'کلید لایسنس و آدرس دامنه الزامی است.' );
 		}
 
+		// 2. یافتن لایسنس
 		$license = rl_get_license( $license_key );
 
 		if ( ! $license ) {
-			return $this->error( 'invalid_license', 'لایسنس نامعتبر است.', 404 );
+			return $this->response( false, 'invalid_license', 'لایسنس یافت نشد یا نامعتبر است.' );
 		}
 
-		// بررسی وضعیت کلی لایسنس (مثلاً اگر مدیر آن را مسدود کرده باشد)
+		// 3. بررسی وضعیت کلی لایسنس
 		if ( $license->status !== 'active' ) {
-			return $this->error( 'license_blocked', 'این لایسنس مسدود یا منقضی شده است.' );
+			return $this->response( false, 'license_blocked', 'این لایسنس مسدود یا غیرفعال شده است.' );
 		}
 
-		// بررسی دامین
+		// 4. بررسی تاریخ انقضا
+		if ( $license->expires_at && strtotime( $license->expires_at ) < time() ) {
+			return $this->response( false, 'license_expired', 'مدت اعتبار لایسنس به پایان رسیده است.' );
+		}
+
+		// 5. بررسی تطابق دامنه
 		$clean_domain = rl_normalize_domain( $domain );
 		global $wpdb;
 		$activation = $wpdb->get_row( $wpdb->prepare(
@@ -84,25 +97,27 @@ class ReadyLicense_API {
 		) );
 
 		if ( ! $activation ) {
-			return $this->error( 'domain_mismatch', 'این لایسنس برای این دامنه فعال نشده است.' );
+			return $this->response( false, 'domain_mismatch', 'این لایسنس برای دامنه ارسالی فعال نشده است.' );
 		}
 
-		// آپدیت زمان آخرین بررسی (برای آمارگیری)
+		// 6. آپدیت زمان آخرین بررسی (برای آمارگیری مدیر)
 		$wpdb->update(
 			$wpdb->prefix . 'rl_activations',
-			[ 'last_check_at' => current_time( 'mysql' ), 'ip_address' => rl_get_ip() ],
+			[ 
+				'last_check_at' => current_time( 'mysql' ), 
+				'ip_address'    => rl_get_ip() 
+			],
 			[ 'id' => $activation->id ]
 		);
 
-		return $this->success( [
-			'status' => 'valid',
-			'message' => 'لایسنس معتبر است.',
-			'holder'  => 'کاربر محترم', // می‌توان نام کاربر را هم فرستاد
+		return $this->response( true, 'valid', 'لایسنس معتبر است.', [
+			'expires_at' => $license->expires_at,
+			'holder'     => 'Customer',
 		] );
 	}
 
 	/**
-	 * متد: فعال‌سازی لایسنس (اولین بار)
+	 * متد: فعال‌سازی لایسنس (از راه دور)
 	 */
 	public function activate_license( $request ) {
 		$params = $request->get_params();
@@ -110,29 +125,21 @@ class ReadyLicense_API {
 		$domain      = esc_url_raw( $params['domain'] ?? '' );
 
 		if ( empty( $license_key ) || empty( $domain ) ) {
-			return $this->error( 'missing_params', 'کلید لایسنس و دامنه الزامی است.' );
+			return $this->response( false, 'missing_params', 'پارامترهای ضروری ارسال نشده‌اند.' );
 		}
 
-		// استفاده از تابع کمکی هوشمند که قبلاً نوشتیم
+		// استفاده از تابع مرکزی فعال‌سازی
 		$result = rl_activate_license( $license_key, $domain );
 
 		if ( is_wp_error( $result ) ) {
-			// لاگ کردن تلاش ناموفق
-			$license = rl_get_license( $license_key );
-			if ($license) {
-				rl_log( $license->id, 'activation_failed', $result->get_error_message() . " - IP: " . rl_get_ip() );
-			}
-			return $this->error( $result->get_error_code(), $result->get_error_message() );
+			return $this->response( false, $result->get_error_code(), $result->get_error_message() );
 		}
 
-		return $this->success( [
-			'status' => 'active',
-			'message' => 'لایسنس با موفقیت روی این دامنه فعال شد.',
-		] );
+		return $this->response( true, 'active', 'لایسنس با موفقیت فعال شد.' );
 	}
 
 	/**
-	 * متد: حذف لایسنس (مثلاً وقتی کاربر می‌خواهد دامین را عوض کند)
+	 * متد: غیرفعال‌سازی لایسنس (از راه دور)
 	 */
 	public function deactivate_license( $request ) {
 		$params = $request->get_params();
@@ -142,36 +149,31 @@ class ReadyLicense_API {
 		$license = rl_get_license( $license_key );
 
 		if ( ! $license ) {
-			return $this->error( 'invalid_license', 'لایسنس یافت نشد.' );
+			return $this->response( false, 'invalid_license', 'لایسنس یافت نشد.' );
 		}
 
 		$result = rl_deactivate_license( $license->id, $domain );
 
 		if ( $result ) {
-			return $this->success( [
-				'status' => 'deactivated',
-				'message' => 'لایسنس از روی این دامنه حذف شد.',
-			] );
+			return $this->response( true, 'deactivated', 'لایسنس از روی دامنه حذف شد.' );
 		} else {
-			return $this->error( 'deactivation_failed', 'عملیات ناموفق بود یا دامین پیدا نشد.' );
+			return $this->response( false, 'failed', 'عملیات ناموفق بود یا دامنه یافت نشد.' );
 		}
 	}
 
 	/**
-	 * پاسخ موفقیت‌آمیز استاندارد
+	 * ساخت پاسخ استاندارد JSON
 	 */
-	private function success( $data = [] ) {
-		return new WP_REST_Response( array_merge( [ 'success' => true ], $data ), 200 );
-	}
-
-	/**
-	 * پاسخ خطای استاندارد
-	 */
-	private function error( $code, $message, $status = 400 ) {
-		return new WP_REST_Response( [
-			'success' => false,
+	private function response( $success, $code, $message, $extra_data = [] ) {
+		$data = array_merge( [
+			'success' => $success,
 			'code'    => $code,
 			'message' => $message,
-		], $status );
+			'data'    => [
+				'status' => $success ? 200 : 400
+			]
+		], $extra_data );
+
+		return new WP_REST_Response( $data, 200 );
 	}
 }

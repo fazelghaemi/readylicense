@@ -19,7 +19,11 @@ function rl_generate_license_key( $prefix = '' ) {
 		$prefix = get_option( 'readylicense_license_prefix', 'RL-' );
 	}
 	
-	return strtoupper( $prefix . bin2hex( random_bytes( 8 ) ) );
+	// تولید بایت‌های تصادفی و تبدیل به هگز
+	$random_hex = bin2hex( random_bytes( 8 ) ); // 16 کاراکتر
+	$formatted  = strtoupper( $prefix . $random_hex );
+	
+	return $formatted;
 }
 
 /**
@@ -50,6 +54,12 @@ function rl_create_license( $args = [] ) {
 
 	$table = $wpdb->prefix . 'rl_licenses';
 	
+	// بررسی تکراری نبودن کلید
+	$exists = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table WHERE license_key = %s", $data['license_key'] ) );
+	if ( $exists ) {
+		$data['license_key'] = rl_generate_license_key(); // تلاش مجدد با کلید جدید
+	}
+
 	$inserted = $wpdb->insert(
 		$table,
 		[
@@ -95,7 +105,8 @@ function rl_get_license( $key_or_id ) {
 }
 
 /**
- * فعال‌سازی لایسنس روی یک دامنه (Activation)
+ * فعال‌سازی لایسنس روی یک دامنه (Activation Logic)
+ * این تابع توسط API صدا زده می‌شود.
  *
  * @param string $license_key کلید لایسنس
  * @param string $domain دامنه سایت کاربر
@@ -131,10 +142,17 @@ function rl_activate_license( $license_key, $domain ) {
 	) );
 
 	if ( $existing ) {
+		// آپدیت زمان آخرین بررسی
+		$wpdb->update( 
+			$table_activations, 
+			[ 'last_check_at' => current_time( 'mysql' ), 'ip_address' => rl_get_ip() ], 
+			[ 'id' => $existing->id ] 
+		);
 		return true; // قبلاً فعال بوده، مشکلی نیست
 	}
 
 	// بررسی محدودیت تعداد نصب
+	// نکته: ما تعداد را از جدول اکتیویشن می‌شماریم تا دقیق باشد
 	$current_activations = $wpdb->get_var( $wpdb->prepare( 
 		"SELECT COUNT(*) FROM $table_activations WHERE license_id = %d", 
 		$license->id 
@@ -145,26 +163,31 @@ function rl_activate_license( $license_key, $domain ) {
 	}
 
 	// ثبت فعال‌سازی جدید
-	$wpdb->insert(
+	$inserted = $wpdb->insert(
 		$table_activations,
 		[
-			'license_id' => $license->id,
-			'domain'     => $clean_domain,
-			'ip_address' => rl_get_ip(),
-			'platform'   => isset($_SERVER['HTTP_USER_AGENT']) ? substr($_SERVER['HTTP_USER_AGENT'], 0, 99) : 'Unknown',
+			'license_id'    => $license->id,
+			'domain'        => $clean_domain,
+			'ip_address'    => rl_get_ip(),
+			'platform'      => isset($_SERVER['HTTP_USER_AGENT']) ? substr($_SERVER['HTTP_USER_AGENT'], 0, 99) : 'Unknown',
+			'activated_at'  => current_time( 'mysql' ),
+			'last_check_at' => current_time( 'mysql' ),
 		]
 	);
 
-	// آپدیت تعداد استفاده در جدول اصلی (برای سرعت بیشتر در نمایش)
-	$wpdb->update( 
-		$wpdb->prefix . 'rl_licenses', 
-		[ 'activation_count' => $current_activations + 1 ], 
-		[ 'id' => $license->id ] 
-	);
+	if ( $inserted ) {
+		// آپدیت تعداد استفاده در جدول اصلی (برای سرعت بیشتر در نمایش لیست‌ها)
+		$wpdb->update( 
+			$wpdb->prefix . 'rl_licenses', 
+			[ 'activation_count' => $current_activations + 1 ], 
+			[ 'id' => $license->id ] 
+		);
 
-	rl_log( $license->id, 'activated', "فعال‌سازی روی دامنه $clean_domain" );
+		rl_log( $license->id, 'activated', "فعال‌سازی روی دامنه $clean_domain" );
+		return true;
+	}
 
-	return true;
+	return new WP_Error( 'rl_db_error', __( 'خطای پایگاه داده هنگام فعال‌سازی.', 'readylicense' ) );
 }
 
 /**
@@ -176,6 +199,7 @@ function rl_deactivate_license( $license_id, $domain ) {
 	$clean_domain = rl_normalize_domain( $domain );
 	$table = $wpdb->prefix . 'rl_activations';
 
+	// حذف رکورد فعال‌سازی
 	$deleted = $wpdb->delete( 
 		$table, 
 		[ 'license_id' => $license_id, 'domain' => $clean_domain ], 
@@ -183,9 +207,9 @@ function rl_deactivate_license( $license_id, $domain ) {
 	);
 
 	if ( $deleted ) {
-		// کاهش کانتر
+		// کاهش کانتر در جدول اصلی
 		$wpdb->query( $wpdb->prepare( 
-			"UPDATE {$wpdb->prefix}rl_licenses SET activation_count = activation_count - 1 WHERE id = %d", 
+			"UPDATE {$wpdb->prefix}rl_licenses SET activation_count = activation_count - 1 WHERE id = %d AND activation_count > 0", 
 			$license_id 
 		) );
 		
@@ -202,9 +226,14 @@ function rl_deactivate_license( $license_id, $domain ) {
  */
 function rl_normalize_domain( $url ) {
 	$url = strtolower( trim( $url ) );
+	// حذف پروتکل
 	$url = preg_replace( '#^https?://#', '', $url );
+	// حذف www
 	$url = preg_replace( '#^www\.#', '', $url );
-	$url = explode( '/', $url )[0]; // حذف مسیرهای اضافی
+	// حذف مسیرهای اضافی و کوئری استرینگ
+	$url = explode( '/', $url )[0];
+	$url = explode( ':', $url )[0]; // حذف پورت اگر باشد
+	
 	return $url;
 }
 
@@ -215,17 +244,24 @@ function rl_get_ip() {
 	if ( ! empty( $_SERVER['HTTP_CLIENT_IP'] ) ) {
 		return $_SERVER['HTTP_CLIENT_IP'];
 	} elseif ( ! empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
-		return $_SERVER['HTTP_X_FORWARDED_FOR'];
+		// ممکن است چند IP باشد، اولی را برمی‌داریم
+		$ips = explode( ',', $_SERVER['HTTP_X_FORWARDED_FOR'] );
+		return trim( $ips[0] );
 	} else {
-		return $_SERVER['REMOTE_ADDR'];
+		return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
 	}
 }
 
 /**
  * سیستم لاگ‌برداری حرفه‌ای
  */
-function rl_log( $license_id, $action, $message = '', $data = null ) {
+function rl_log( $license_id, $action, $message = '', $ip = '' ) {
 	global $wpdb;
+	
+	if ( empty( $ip ) ) {
+		$ip = rl_get_ip();
+	}
+
 	$wpdb->insert(
 		$wpdb->prefix . 'rl_logs',
 		[
@@ -233,8 +269,8 @@ function rl_log( $license_id, $action, $message = '', $data = null ) {
 			'user_id'    => get_current_user_id(),
 			'action'     => $action,
 			'message'    => $message,
-			'data'       => is_array($data) ? json_encode($data) : $data,
-			'ip_address' => rl_get_ip(),
+			'ip_address' => $ip,
+			'created_at' => current_time( 'mysql' ),
 		]
 	);
 }

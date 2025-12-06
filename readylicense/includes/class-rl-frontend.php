@@ -1,6 +1,6 @@
 <?php
 /**
- * مدیریت API های REST برای ارتباط با سایت‌های مشتریان
+ * مدیریت بخش کاربری (Frontend) در حساب کاربری ووکامرس
  *
  * @package ReadyLicense
  */
@@ -9,169 +9,142 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class ReadyLicense_API {
+class ReadyLicense_Frontend {
 
-	/**
-	 * فضای نام API
-	 */
-	const NAMESPACE = 'readylicense/v1';
-
-	/**
-	 * راه‌اندازی کلاس
-	 */
 	public function __construct() {
-		add_action( 'rest_api_init', [ $this, 'register_routes' ] );
-	}
-
-	/**
-	 * ثبت مسیرهای (Endpoints) ای‌پی‌آی
-	 */
-	public function register_routes() {
+		// اضافه کردن تب جدید به منوی حساب کاربری
+		add_filter( 'woocommerce_account_menu_items', [ $this, 'add_license_tab' ] );
 		
-		// 1. بررسی وضعیت لایسنس (Check)
-		register_rest_route( self::NAMESPACE, '/check', [
-			'methods'             => 'POST',
-			'callback'            => [ $this, 'check_license' ],
-			'permission_callback' => '__return_true', // امنیت داخل تابع بررسی می‌شود
-		] );
+		// ثبت Endpoint برای آدرس‌دهی (my-account/licenses)
+		add_action( 'init', [ $this, 'add_endpoint' ] );
+		
+		// نمایش محتوای تب
+		add_action( 'woocommerce_account_licenses_endpoint', [ $this, 'render_licenses_page' ] );
+		
+		// تغییر عنوان صفحه در تب لایسنس‌ها
+		add_filter( 'the_title', [ $this, 'change_page_title' ] );
 
-		// 2. فعال‌سازی لایسنس (Activate)
-		register_rest_route( self::NAMESPACE, '/activate', [
-			'methods'             => 'POST',
-			'callback'            => [ $this, 'activate_license' ],
-			'permission_callback' => '__return_true',
-		] );
-
-		// 3. غیرفعال‌سازی لایسنس (Deactivate)
-		register_rest_route( self::NAMESPACE, '/deactivate', [
-			'methods'             => 'POST',
-			'callback'            => [ $this, 'deactivate_license' ],
-			'permission_callback' => '__return_true',
-		] );
+		// شورت‌کد برای نمایش در صفحات دلخواه
+		add_shortcode( 'ready_license_dashboard', [ $this, 'render_shortcode' ] );
 	}
 
 	/**
-	 * متد: بررسی وضعیت لایسنس
-	 * این متد توسط قالب/افزونه در سایت مشتری هر ۲۴ ساعت یکبار صدا زده می‌شود.
+	 * افزودن آیتم به منوی حساب کاربری
 	 */
-	public function check_license( $request ) {
-		$params = $request->get_params();
-		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
-		$domain      = esc_url_raw( $params['domain'] ?? '' );
+	public function add_license_tab( $items ) {
+		$label = get_option( 'readylicense_label_menu', 'لایسنس‌های من' );
+		
+		// جایگذاری در موقعیت مناسب (معمولاً بعد از سفارش‌ها)
+		$new_items = [];
+		foreach ( $items as $key => $item ) {
+			$new_items[ $key ] = $item;
+			if ( $key === 'orders' ) {
+				$new_items['licenses'] = $label;
+			}
+		}
+		return $new_items;
+	}
 
-		if ( empty( $license_key ) || empty( $domain ) ) {
-			return $this->error( 'missing_params', 'پارامترهای ضروری ارسال نشده‌اند.' );
+	/**
+	 * ثبت Endpoint
+	 */
+	public function add_endpoint() {
+		add_rewrite_endpoint( 'licenses', EP_ROOT | EP_PAGES );
+	}
+
+	/**
+	 * تغییر عنوان صفحه
+	 */
+	public function change_page_title( $title ) {
+		global $wp_query;
+		if ( isset( $wp_query->query_vars['licenses'] ) && is_main_query() && in_the_loop() && is_account_page() ) {
+			$title = get_option( 'readylicense_label_menu', 'لایسنس‌های من' );
+		}
+		return $title;
+	}
+
+	/**
+	 * نمایش شورت‌کد
+	 */
+	public function render_shortcode() {
+		ob_start();
+		$this->render_licenses_page();
+		return ob_get_clean();
+	}
+
+	/**
+	 * رندر کردن محتوای صفحه لایسنس‌ها
+	 */
+	public function render_licenses_page() {
+		if ( ! is_user_logged_in() ) {
+			echo '<div class="woocommerce-message">' . __( 'لطفاً ابتدا وارد حساب کاربری خود شوید.', 'readylicense' ) . '</div>';
+			return;
 		}
 
-		$license = rl_get_license( $license_key );
+		$user_id = get_current_user_id();
+		
+		// دریافت لیست لایسنس‌های کاربر از دیتابیس اختصاصی
+		$licenses = $this->get_user_licenses( $user_id );
 
-		if ( ! $license ) {
-			return $this->error( 'invalid_license', 'لایسنس نامعتبر است.', 404 );
-		}
+		// بارگذاری تمپلت (ویو)
+		// ما متغیر $licenses را به تمپلت پاس می‌دهیم
+		include RL_PLUGIN_DIR . 'templates/dashboard.php';
+	}
 
-		// بررسی وضعیت کلی لایسنس (مثلاً اگر مدیر آن را مسدود کرده باشد)
-		if ( $license->status !== 'active' ) {
-			return $this->error( 'license_blocked', 'این لایسنس مسدود یا منقضی شده است.' );
-		}
-
-		// بررسی دامین
-		$clean_domain = rl_normalize_domain( $domain );
+	/**
+	 * دریافت لایسنس‌های کاربر
+	 * این متد از جدول rl_licenses دیتابیس استفاده می‌کند.
+	 */
+	private function get_user_licenses( $user_id ) {
 		global $wpdb;
-		$activation = $wpdb->get_row( $wpdb->prepare(
-			"SELECT * FROM {$wpdb->prefix}rl_activations WHERE license_id = %d AND domain = %s",
-			$license->id,
-			$clean_domain
+		
+		// کوئری برای گرفتن لایسنس‌ها + اطلاعات محصول (اختیاری)
+		// ما فقط لایسنس‌هایی را می‌خواهیم که وضعیتشان inactive یا مسدود نباشد (مگر اینکه بخواهیم همه را نشان دهیم)
+		// در اینجا همه لایسنس‌های متصل به کاربر را می‌گیریم.
+		$table_licenses = $wpdb->prefix . 'rl_licenses';
+		
+		$results = $wpdb->get_results( $wpdb->prepare( 
+			"SELECT * FROM $table_licenses WHERE user_id = %d ORDER BY created_at DESC", 
+			$user_id 
 		) );
 
-		if ( ! $activation ) {
-			return $this->error( 'domain_mismatch', 'این لایسنس برای این دامنه فعال نشده است.' );
-		}
+		$data = [];
 
-		// آپدیت زمان آخرین بررسی (برای آمارگیری)
-		$wpdb->update(
-			$wpdb->prefix . 'rl_activations',
-			[ 'last_check_at' => current_time( 'mysql' ), 'ip_address' => rl_get_ip() ],
-			[ 'id' => $activation->id ]
-		);
+		if ( $results ) {
+			foreach ( $results as $license ) {
+				$product = wc_get_product( $license->product_id );
+				
+				// اگر محصول حذف شده باشد، لایسنس را نمایش نده (یا مدیریت کن)
+				if ( ! $product ) continue;
 
-		return $this->success( [
-			'status' => 'valid',
-			'message' => 'لایسنس معتبر است.',
-			'holder'  => 'کاربر محترم', // می‌توان نام کاربر را هم فرستاد
-		] );
-	}
+				// دریافت لیست دامین‌های فعال برای این لایسنس
+				$activations = $this->get_license_activations( $license->id );
 
-	/**
-	 * متد: فعال‌سازی لایسنس (اولین بار)
-	 */
-	public function activate_license( $request ) {
-		$params = $request->get_params();
-		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
-		$domain      = esc_url_raw( $params['domain'] ?? '' );
-
-		if ( empty( $license_key ) || empty( $domain ) ) {
-			return $this->error( 'missing_params', 'کلید لایسنس و دامنه الزامی است.' );
-		}
-
-		// استفاده از تابع کمکی هوشمند که قبلاً نوشتیم
-		$result = rl_activate_license( $license_key, $domain );
-
-		if ( is_wp_error( $result ) ) {
-			// لاگ کردن تلاش ناموفق
-			$license = rl_get_license( $license_key );
-			if ($license) {
-				rl_log( $license->id, 'activation_failed', $result->get_error_message() . " - IP: " . rl_get_ip() );
+				$data[] = [
+					'id'               => $license->id,
+					'license_key'      => $license->license_key,
+					'product_name'     => $product->get_name(),
+					'product_url'      => $product->get_permalink(),
+					'product_image'    => $product->get_image( 'thumbnail' ), // تصویر محصول
+					'status'           => $license->status,
+					'activations'      => $activations,
+					'activation_limit' => $license->activation_limit,
+					'activation_count' => count( $activations ),
+					'expires_at'       => $license->expires_at,
+					'is_expired'       => $license->expires_at && strtotime( $license->expires_at ) < time(),
+				];
 			}
-			return $this->error( $result->get_error_code(), $result->get_error_message() );
 		}
 
-		return $this->success( [
-			'status' => 'active',
-			'message' => 'لایسنس با موفقیت روی این دامنه فعال شد.',
-		] );
+		return $data;
 	}
 
 	/**
-	 * متد: حذف لایسنس (مثلاً وقتی کاربر می‌خواهد دامین را عوض کند)
+	 * دریافت لیست فعال‌سازی‌ها (دامین‌ها) برای یک لایسنس خاص
 	 */
-	public function deactivate_license( $request ) {
-		$params = $request->get_params();
-		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
-		$domain      = esc_url_raw( $params['domain'] ?? '' );
-
-		$license = rl_get_license( $license_key );
-
-		if ( ! $license ) {
-			return $this->error( 'invalid_license', 'لایسنس یافت نشد.' );
-		}
-
-		$result = rl_deactivate_license( $license->id, $domain );
-
-		if ( $result ) {
-			return $this->success( [
-				'status' => 'deactivated',
-				'message' => 'لایسنس از روی این دامنه حذف شد.',
-			] );
-		} else {
-			return $this->error( 'deactivation_failed', 'عملیات ناموفق بود یا دامین پیدا نشد.' );
-		}
-	}
-
-	/**
-	 * پاسخ موفقیت‌آمیز استاندارد
-	 */
-	private function success( $data = [] ) {
-		return new WP_REST_Response( array_merge( [ 'success' => true ], $data ), 200 );
-	}
-
-	/**
-	 * پاسخ خطای استاندارد
-	 */
-	private function error( $code, $message, $status = 400 ) {
-		return new WP_REST_Response( [
-			'success' => false,
-			'code'    => $code,
-			'message' => $message,
-		], $status );
+	private function get_license_activations( $license_id ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'rl_activations';
+		return $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $table WHERE license_id = %d", $license_id ) );
 	}
 }
