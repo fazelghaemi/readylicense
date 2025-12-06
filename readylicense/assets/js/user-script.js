@@ -1,173 +1,121 @@
-jQuery(document).ready(function ($) {
-    // تابع برای نمایش اعلان بوت‌استرپ
-    function showAlert(type, message) {
-        var alertDiv = $('#license-alert');
-        alertDiv.removeClass('alert-success alert-danger').addClass('alert-' + type);
-        alertDiv.text(message);
-        alertDiv.show();
-        setTimeout(function () {
-            alertDiv.fadeOut();
-        }, 5000); // مخفی شدن بعد از 5 ثانیه
+/**
+ * ReadyLicense Frontend Script
+ * Optimized specifically for speed and performance.
+ * Vanilla JS (No jQuery dependency).
+ */
+
+document.addEventListener('DOMContentLoaded', function() {
+    
+    // 1. Performance Check: Does the license container exist?
+    // اگر المان اصلی در صفحه نیست، هیچ کدی اجرا نکن.
+    const container = document.getElementById('readylicense-user-panel');
+    if (!container) return;
+
+    // متغیرهای دریافتی از PHP (که در فایل اصلی تعریف کردیم)
+    const config = window.rl_front || {};
+
+    /**
+     * مدیریت کلیک‌ها با الگوی Event Delegation
+     * این روش حافظه مرورگر را بسیار کمتر اشغال می‌کند
+     */
+    container.addEventListener('click', function(e) {
+        
+        // دکمه فعال‌سازی
+        if (e.target.closest('.rl-btn-activate')) {
+            e.preventDefault();
+            const btn = e.target.closest('.rl-btn-activate');
+            handleAction('activate', btn);
+        }
+
+        // دکمه مدیریت دامین
+        if (e.target.closest('.rl-btn-manage-domain')) {
+            e.preventDefault();
+            const btn = e.target.closest('.rl-btn-manage-domain');
+            toggleDomainModal(btn.dataset.licenseId);
+        }
+    });
+
+    /**
+     * تابع اصلی ارسال درخواست به سرور (Fetch API)
+     */
+    async function handleAction(actionType, element) {
+        const licenseKey = element.dataset.key;
+        const originalText = element.innerText;
+        
+        // حالت لودینگ
+        element.disabled = true;
+        element.innerText = '...';
+        element.classList.add('rl-loading');
+
+        try {
+            const formData = new URLSearchParams();
+            formData.append('action', 'rl_handle_frontend_request'); // اکشن واحد در PHP
+            formData.append('security', config.nonce);
+            formData.append('request_type', actionType);
+            formData.append('license_key', licenseKey);
+
+            const response = await fetch(config.ajax_url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showMessage('success', data.data.message);
+                // آپدیت UI بدون رفرش صفحه
+                updateLicenseUI(element, data.data);
+            } else {
+                showMessage('error', data.data.message || 'Error occurred');
+            }
+
+        } catch (error) {
+            console.error('RL Error:', error);
+            showMessage('error', 'ارتباط با سرور برقرار نشد.');
+        } finally {
+            // بازگشت به حالت عادی
+            element.disabled = false;
+            element.innerText = originalText;
+            element.classList.remove('rl-loading');
+        }
     }
 
-    // اعتبارسنجی دامنه در سمت کلاینت
-    function isDomainValid(domain) {
-        return /\.[a-zA-Z]{2,}$/.test(domain) && domain.length >= 5 && domain.length <= 255;
+    /**
+     * نمایش پیام‌ها (جایگزین alert و کتابخانه‌های سنگین)
+     */
+    function showMessage(type, text) {
+        const msgBox = document.createElement('div');
+        msgBox.className = `rl-notification rl-${type}`;
+        msgBox.innerText = text;
+        
+        container.prepend(msgBox);
+
+        // حذف خودکار بعد از ۳ ثانیه (برای جلوگیری از reflow زیاد)
+        setTimeout(() => msgBox.remove(), 3000);
     }
 
-    // متغیر برای ذخیره دامنه‌های فعلی
-    let currentDomains = [];
-
-    // مدیریت دکمه ویرایش دامنه
-    $('.license-button').on('click', function () {
-        var productId = $(this).data('product_id');
-        var orderItemId = $(this).data('order_item_id');
-
-        // پر کردن مقادیر در مودال
-        $('#product-id').val(productId);
-        $('#order-item-id').val(orderItemId);
-
-        // بررسی تعداد دامنه و وضعیت غیرفعال
-        $.ajax({
-            url: license_ajax.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'check_domain_count',
-                product_id: productId,
-                order_item_id: orderItemId
-            },
-            success: function (response) {
-                if (response.success) {
-                    var domainCount = response.data.domain_count;
-                    var isDisabled = response.data.is_disabled;
-                    var maxDomains = license_ajax.opt_number_license;
-                    currentDomains = response.data.current_domains || []; // ذخیره دامنه‌های فعلی
-
-                    if (isDisabled) {
-                        showAlert('danger', 'دامنه‌های شما غیرفعال است و قابل ویرایش نیست.');
-                        $('#disabled-warning').show();
-                        $('#license-form button[type="submit"]').prop('disabled', true);
-                    } else if (domainCount >= maxDomains) {
-                        showAlert('danger', 'شما به حداکثر تعداد مجاز تغییر دامنه رسیده‌اید.');
-                        $('#domain-limit-warning').show();
-                        $('#license-form button[type="submit"]').prop('disabled', true);
-                    } else {
-                        $('#disabled-warning').hide();
-                        $('#domain-limit-warning').hide();
-                        $('#license-form button[type="submit"]').prop('disabled', false);
-                        $('#license-modal').modal('show');
-                    }
-                } else {
-                    showAlert('danger', response.data || 'خطا در بررسی وضعیت دامنه.');
-                }
-            },
-            error: function () {
-                showAlert('danger', 'خطایی در بررسی تعداد دامنه رخ داد.');
-            }
-        });
-    });
-
-    // ارسال فرم ثبت دامنه
-    $('#license-form').on('submit', function (e) {
-        e.preventDefault();
-        var domain = $('#domain-name').val().trim();
-        var productId = $('#product-id').val();
-        var orderItemId = $('#order-item-id').val();
-
-        // اعتبارسنجی دامنه در سمت کلاینت
-        if (!isDomainValid(domain)) {
-            showAlert('danger', 'دامنه نامعتبر است. لطفاً دامنه‌ای با پسوند معتبر (مثل .com) وارد کنید.');
-            return;
+    /**
+     * به‌روزرسانی بخشی از رابط کاربری
+     */
+    function updateLicenseUI(element, newData) {
+        // مثال: تغییر کلاس دکمه یا تغییر وضعیت متن
+        const row = element.closest('.rl-license-row');
+        if (row && newData.new_status) {
+            row.querySelector('.rl-status').innerText = newData.new_status;
+            row.classList.toggle('active', newData.new_status === 'active');
         }
+    }
 
-        // بررسی یکسان بودن دامنه با دامنه فعلی
-        if (currentDomains.length > 0 && currentDomains.includes(domain)) {
-            showAlert('warning', 'دامنه واردشده با دامنه فعلی یکسان است. لطفاً دامنه جدیدی وارد کنید.');
-            return;
+    // Modal Logic (Simple & Lightweight)
+    function toggleDomainModal(licenseId) {
+        const modal = document.getElementById('rl-domain-modal');
+        if(modal) {
+            modal.classList.toggle('open');
+            // اینجا می‌توانید لیست دامین‌ها را با یک درخواست جداگانه لود کنید
+            // فقط زمانی که مودال باز می‌شود
         }
-
-        $.ajax({
-            url: license_ajax.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'save_license',
-                domain: domain,
-                product_id: productId,
-                order_item_id: orderItemId
-            },
-            beforeSend: function () {
-                $('#license-form button[type="submit"]').prop('disabled', true).text('در حال ذخیره...');
-            },
-            success: function (response) {
-                if (response.success) {
-                    showAlert('success', response.data.message);
-                    $('#license-modal').modal('hide');
-                    setTimeout(function () {
-                        location.reload(); // رفرش صفحه برای به‌روزرسانی لیست
-                    }, 1000); // تأخیر 1 ثانیه برای نمایش پیام موفقیت
-                } else {
-                    showAlert('danger', response.data || 'خطا در ثبت دامنه.');
-                }
-            },
-            error: function () {
-                showAlert('danger', 'خطایی رخ داد. لطفاً دوباره تلاش کنید.');
-            },
-            complete: function () {
-                $('#license-form button[type="submit"]').prop('disabled', false).text('ذخیره');
-            }
-        });
-    });
-
-    // مدیریت دکمه تمدید
-    $('.renew-license').on('click', function () {
-        var productId = $(this).data('product_id');
-        var orderItemId = $(this).data('order_item_id');
-        var domain = $(this).data('domain');
-        var price = $(this).data('price');
-        var $button = $(this);
-
-        if (!productId || !orderItemId || !domain || !price) {
-            showAlert('danger', 'یکی از مقادیر مورد نیاز وجود ندارد!');
-            return;
-        }
-
-        $.ajax({
-            url: license_ajax.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'renew_license',
-                product_id: productId,
-                order_item_id: orderItemId,
-                domain: domain,
-                price: price
-            },
-            beforeSend: function () {
-                $button.prop('disabled', true).text('در حال پردازش...');
-            },
-            success: function (response) {
-                if (response.success) {
-                    showAlert('success', response.data.message);
-                    setTimeout(function () {
-                        window.location.href = response.data.checkout_url;
-                    }, 1000); // تأخیر 1 ثانیه برای نمایش پیام موفقیت
-                } else {
-                    showAlert('danger', response.data || 'خطا در تمدید لایسنس.');
-                }
-            },
-            error: function () {
-                showAlert('danger', 'خطایی رخ داد. لطفاً دوباره تلاش کنید.');
-            },
-            complete: function () {
-                $button.prop('disabled', false).text('تمدید');
-            }
-        });
-    });
-
-    // بستن مودال و ریست فرم
-    $('#license-modal').on('hidden.bs.modal', function () {
-        $('#license-form')[0].reset();
-        $('#disabled-warning').hide();
-        $('#domain-limit-warning').hide();
-        $('#license-form button[type="submit"]').prop('disabled', false).text('ذخیره');
-    });
+    }
 });
