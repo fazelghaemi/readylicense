@@ -1,0 +1,58 @@
+.list-license td, .list-license th {
+    padding: .35rem;
+    vertical-align: middle;
+    border-top: 1px solid #dee2e6;
+	text-align: center;
+    font-size: 14px;
+}
+
+.list-license td, .list-license th {
+    padding: .35rem !important;
+    vertical-align: middle !important;
+    border-top: 1px solid #dee2e6 !important;
+}
+
+.license-button{
+    padding: 5px 10px !important;
+    margin: 5px !important;
+    font-size: 14px !important;
+}
+
+
+.list-license> .pagination{
+
+    text-align: center;
+    display: flex;
+    justify-content: center;
+    margin-top: 80px;
+}
+
+.list-license .pagination> .page-link{
+    padding: 3px 14px;
+    margin: 4px !important;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 8px;
+}
+
+
+sub, sup{
+
+    font-family: IRANSans;
+}
+
+.control-close{
+    display: contents;
+}
+
+.title-domain{
+    font-weight: 600 !important;
+}
+
+.status-doamin{
+    
+    background: #202022;
+    color: #fff;
+    padding: 1px 6px;
+    border-radius: 5px
+}
