@@ -14,9 +14,6 @@ class ReadyLicense_Ajax {
 	public function __construct() {
 		// هندلر درخواست‌های فرانت‌اند (کاربر لاگین شده)
 		add_action( 'wp_ajax_rl_handle_frontend_request', [ $this, 'handle_frontend_request' ] );
-		
-		// اگر نیاز باشد کاربر لاگین نکرده هم درخواست بفرستد (مثلاً برای چک کردن وضعیت لایسنس در صفحه محصول)
-		// add_action( 'wp_ajax_nopriv_rl_handle_frontend_request', [ $this, 'handle_frontend_request' ] );
 	}
 
 	/**
@@ -54,7 +51,8 @@ class ReadyLicense_Ajax {
 	}
 
 	/**
-	 * پردازش افزودن دامنه جدید
+	 * پردازش افزودن/تغییر دامنه
+	 * اگر محدودیت لایسنس 1 باشد، دامنه قبلی را جایگزین می‌کند.
 	 */
 	private function process_add_domain() {
 		$license_id = isset( $_POST['license_id'] ) ? intval( $_POST['license_id'] ) : 0;
@@ -77,7 +75,29 @@ class ReadyLicense_Ajax {
 			throw new Exception( __( 'این لایسنس فعال نیست.', 'readylicense' ) );
 		}
 
-		// تلاش برای فعال‌سازی
+		// منطق جایگزینی دامنه (Swap) برای لایسنس‌های تک‌کاربره
+		// اگر سقف پر شده و سقف برابر ۱ است، دامنه قبلی را حذف کن تا جدید ثبت شود
+		if ( intval( $license->activation_limit ) === 1 && intval( $license->activation_count ) >= 1 ) {
+			global $wpdb;
+			$table_activations = $wpdb->prefix . 'rl_activations';
+
+			// دریافت دامنه فعلی
+			$existing_activation = $wpdb->get_row( $wpdb->prepare(
+				"SELECT domain FROM $table_activations WHERE license_id = %d LIMIT 1",
+				$license->id
+			) );
+
+			if ( $existing_activation ) {
+				$new_clean_domain = rl_normalize_domain( $domain );
+
+				// اگر دامنه جدید با قبلی متفاوت است، قبلی را حذف کن
+				if ( $existing_activation->domain !== $new_clean_domain ) {
+					rl_deactivate_license( $license->id, $existing_activation->domain );
+				}
+			}
+		}
+
+		// تلاش برای فعال‌سازی دامنه جدید
 		$result = rl_activate_license( $license->license_key, $domain );
 
 		if ( is_wp_error( $result ) ) {

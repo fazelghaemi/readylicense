@@ -105,84 +105,114 @@ class ReadyLicense_Frontend {
 			$user_id 
 		) );
 
+		if ( empty( $results ) ) {
+			return [];
+		}
+
+		// بهینه‌سازی: دریافت دامین‌ها به صورت یکجا (جلوگیری از N+1 Query)
+		$license_ids = wp_list_pluck( $results, 'id' );
+		$activations_map = $this->get_bulk_activations( $license_ids );
+
 		$data = [];
 
-		if ( $results ) {
-			foreach ( $results as $license ) {
-				$product = wc_get_product( $license->product_id );
-				
-				// اگر محصول حذف شده باشد، ادامه نده
-				if ( ! $product ) continue;
+		foreach ( $results as $license ) {
+			// استفاده از کش آبجکت ووکامرس
+			$product = wc_get_product( $license->product_id );
 
-				// دریافت اولین دامین فعال
-				$domain_info = $this->get_primary_activation( $license->id );
-				$domain_name = $domain_info ? $domain_info->domain : null;
+			// اگر محصول حذف شده باشد، ادامه نده
+			if ( ! $product ) continue;
 
-				// محاسبه روزهای پشتیبانی باقی‌مانده
-				$support_days = 0;
-				$support_text = __( 'مادام‌العمر', 'readylicense' );
-				$is_expired = false;
+			// دریافت دامین از مپ آماده شده
+			$domain_name = isset( $activations_map[ $license->id ] ) ? $activations_map[ $license->id ] : null;
 
-				if ( ! empty( $license->expires_at ) ) {
-					$expiry_timestamp = strtotime( $license->expires_at );
-					$now = time();
-					$is_expired = $expiry_timestamp < $now;
+			// محاسبه روزهای پشتیبانی باقی‌مانده
+			$support_days = 0;
+			$support_text = __( 'مادام‌العمر', 'readylicense' );
+			$is_expired = false;
 
-					if ( ! $is_expired ) {
-						$diff = $expiry_timestamp - $now;
-						$support_days = ceil( $diff / 86400 );
-						$support_text = sprintf( __( '%d روز', 'readylicense' ), $support_days );
-					} else {
-						$support_text = __( 'منقضی شده', 'readylicense' );
-					}
+			if ( ! empty( $license->expires_at ) ) {
+				$expiry_timestamp = strtotime( $license->expires_at );
+				$now = time();
+				$is_expired = $expiry_timestamp < $now;
+
+				if ( ! $is_expired ) {
+					$diff = $expiry_timestamp - $now;
+					$support_days = ceil( $diff / 86400 );
+					$support_text = sprintf( __( '%d روز', 'readylicense' ), $support_days );
+				} else {
+					$support_text = __( 'منقضی شده', 'readylicense' );
 				}
-
-				// دریافت لینک‌های دانلود اختصاصی از متای محصول
-				$fast_install_url = $product->get_meta( '_rl_fast_install_url' );
-				$edu_file_url     = $product->get_meta( '_rl_edu_file_url' );
-
-				// دریافت فایل‌های دانلودی استاندارد ووکامرس
-				$downloads = $product->get_downloads();
-				$product_download_url = '';
-				if ( ! empty( $downloads ) ) {
-					// لینک اولین فایل دانلودی را برمی‌داریم
-					$first_download = reset( $downloads );
-					$product_download_url = $first_download->get_file();
-				}
-
-				$data[] = [
-					'id'               => $license->id,
-					'license_key'      => $license->license_key,
-					'product_name'     => $product->get_name(),
-					'product_url'      => $product->get_permalink(),
-					'product_image'    => $product->get_image( [60, 60] ), // اندازه تامنیل کوچک
-					'product_version'  => $product->get_version(),
-					'status'           => $license->status,
-					'domain'           => $domain_name,
-					'has_domain'       => ! empty( $domain_name ),
-					'support_days'     => $support_days,
-					'support_text'     => $support_text,
-					'is_expired'       => $is_expired,
-					'expires_at'       => $license->expires_at,
-					'links'            => [
-						'fast_install' => $fast_install_url,
-						'edu_file'     => $edu_file_url,
-						'product'      => $product_download_url
-					]
-				];
 			}
+
+			// دریافت لینک‌های دانلود اختصاصی از متای محصول
+			$fast_install_url = $product->get_meta( '_rl_fast_install_url' );
+			$edu_file_url     = $product->get_meta( '_rl_edu_file_url' );
+
+			// دریافت فایل‌های دانلودی استاندارد ووکامرس
+			$downloads = $product->get_downloads();
+			$product_download_url = '';
+			if ( ! empty( $downloads ) ) {
+				// لینک اولین فایل دانلودی را برمی‌داریم
+				$first_download = reset( $downloads );
+				$product_download_url = $first_download->get_file();
+			}
+
+			$data[] = [
+				'id'               => $license->id,
+				'license_key'      => $license->license_key,
+				'product_name'     => $product->get_name(),
+				'product_url'      => $product->get_permalink(),
+				'product_image'    => $product->get_image( [60, 60] ), // اندازه تامنیل کوچک
+				'product_version'  => $product->get_version(),
+				'status'           => $license->status,
+				'domain'           => $domain_name,
+				'has_domain'       => ! empty( $domain_name ),
+				'support_days'     => $support_days,
+				'support_text'     => $support_text,
+				'is_expired'       => $is_expired,
+				'expires_at'       => $license->expires_at,
+				'links'            => [
+					'fast_install' => $fast_install_url,
+					'edu_file'     => $edu_file_url,
+					'product'      => $product_download_url
+				]
+			];
 		}
 
 		return $data;
 	}
 
 	/**
-	 * دریافت اولین فعال‌سازی (برای نمایش تک دامنه)
+	 * دریافت فعال‌سازی‌ها به صورت گروهی برای مجموعه‌ای از لایسنس‌ها
+	 *
+	 * @param array $license_ids لیست شناسه‌های لایسنس
+	 * @return array آرایه انجمنی [license_id => domain]
 	 */
-	private function get_primary_activation( $license_id ) {
+	private function get_bulk_activations( $license_ids ) {
+		if ( empty( $license_ids ) ) {
+			return [];
+		}
+
 		global $wpdb;
 		$table = $wpdb->prefix . 'rl_activations';
-		// فقط یک رکورد را برمی‌گردانیم
-		return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE license_id = %d LIMIT 1", $license_id ) );
+
+		// تبدیل آرایه به رشته امن برای SQL IN
+		$ids_placeholder = implode( ',', array_map( 'intval', $license_ids ) );
+
+		// کوئری برای گرفتن همه فعال‌سازی‌های مربوط به این لایسنس‌ها
+		$results = $wpdb->get_results( "SELECT license_id, domain FROM $table WHERE license_id IN ($ids_placeholder)" );
+
+		$map = [];
+		if ( $results ) {
+			foreach ( $results as $row ) {
+				// فرض بر این است که هر لایسنس (در این ویو) فقط یک دامین اصلی دارد
+				// اگر قبلاً ست نشده باشد، ست می‌کنیم (اولین دامین یافت شده)
+				if ( ! isset( $map[ $row->license_id ] ) ) {
+					$map[ $row->license_id ] = $row->domain;
+				}
+			}
+		}
+
+		return $map;
 	}
 }
