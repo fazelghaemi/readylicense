@@ -1,9 +1,10 @@
 <?php
 /**
  * توابع کمکی و هسته منطقی ReadyLicense
- * تمام تعاملات با دیتابیس از طریق این توابع انجام می‌شود.
+ * تمام تعاملات با دیتابیس، تولید کلید و منطق‌های تجاری در این فایل متمرکز شده‌اند.
  *
  * @package ReadyLicense
+ * @version 2.0.2
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -11,26 +12,36 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * تولید یک کلید لایسنس منحصر به فرد و ایمن
- * فرمت: RL-XXXX-XXXX-XXXX-XXXX
+ * تولید یک کلید لایسنس منحصر به فرد، طولانی و ایمن (API Key Style)
+ * فرمت خروجی: RL-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX (32 کاراکتر هگز)
+ *
+ * @param string $prefix پیشوند اختیاری برای کلید
+ * @return string کلید لایسنس تولید شده
  */
 function rl_generate_license_key( $prefix = '' ) {
+	// اگر پیشوندی داده نشده، از تنظیمات بگیر
 	if ( empty( $prefix ) ) {
 		$prefix = get_option( 'readylicense_license_prefix', 'RL-' );
 	}
 	
-	// تولید بایت‌های تصادفی و تبدیل به هگز
-	$random_hex = bin2hex( random_bytes( 8 ) ); // 16 کاراکتر
-	$formatted  = strtoupper( $prefix . $random_hex );
+	try {
+		// استفاده از random_bytes برای امنیت کریپتوگرافی بالا
+		$random_bytes = random_bytes( 16 );
+	} catch ( Exception $e ) {
+		// فال‌بک برای سرورهای قدیمی که random_bytes ندارند
+		$random_bytes = openssl_random_pseudo_bytes( 16 );
+	}
+
+	$random_hex = bin2hex( $random_bytes ); // تبدیل به رشته ۳۲ کاراکتری
 	
-	return $formatted;
+	return strtoupper( $prefix . $random_hex );
 }
 
 /**
  * ایجاد لایسنس جدید در دیتابیس
  *
- * @param array $args اطلاعات لایسنس
- * @return int|WP_Error شناسه لایسنس یا خطا
+ * @param array $args آرایه اطلاعات لایسنس (محصول، کاربر، انقضا و...)
+ * @return int|WP_Error شناسه لایسنس ساخته شده یا آبجکت خطا
  */
 function rl_create_license( $args = [] ) {
 	global $wpdb;
@@ -40,49 +51,52 @@ function rl_create_license( $args = [] ) {
 		'product_id'       => 0,
 		'user_id'          => get_current_user_id(),
 		'order_id'         => 0,
+		'parent_license_id'=> 0,
 		'status'           => 'active',
 		'activation_limit' => get_option( 'readylicense_max_domains', 1 ),
-		'expires_at'       => null, // null یعنی مادام‌العمر
+		'expires_at'       => null, // null به معنای مادام‌العمر است
 	];
 
 	$data = wp_parse_args( $args, $defaults );
 
-	// اعتبارسنجی اولیه
+	// اعتبارسنجی داده‌های ورودی
 	if ( empty( $data['product_id'] ) || empty( $data['user_id'] ) ) {
-		return new WP_Error( 'rl_invalid_data', __( 'اطلاعات محصول یا کاربر نامعتبر است.', 'readylicense' ) );
+		return new WP_Error( 'rl_invalid_data', __( 'شناسه محصول یا کاربر نامعتبر است.', 'readylicense' ) );
 	}
 
 	$table = $wpdb->prefix . 'rl_licenses';
 	
-	// بررسی تکراری نبودن کلید
-	$exists = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table WHERE license_key = %s", $data['license_key'] ) );
-	if ( $exists ) {
-		$data['license_key'] = rl_generate_license_key(); // تلاش مجدد با کلید جدید
+	// اطمینان از یکتا بودن کلید لایسنس (در موارد بسیار نادر ممکن است تکراری باشد)
+	$key_exists = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table WHERE license_key = %s", $data['license_key'] ) );
+	if ( $key_exists ) {
+		$data['license_key'] = rl_generate_license_key(); // تولید مجدد کلید
 	}
 
+	// درج در دیتابیس
 	$inserted = $wpdb->insert(
 		$table,
 		[
-			'license_key'      => $data['license_key'],
-			'product_id'       => $data['product_id'],
-			'user_id'          => $data['user_id'],
-			'order_id'         => $data['order_id'],
-			'status'           => $data['status'],
-			'activation_limit' => $data['activation_limit'],
-			'created_at'       => current_time( 'mysql' ),
-			'expires_at'       => $data['expires_at'],
+			'license_key'       => $data['license_key'],
+			'product_id'        => $data['product_id'],
+			'user_id'           => $data['user_id'],
+			'order_id'          => $data['order_id'],
+			'parent_license_id' => $data['parent_license_id'],
+			'status'            => $data['status'],
+			'activation_limit'  => $data['activation_limit'],
+			'created_at'        => current_time( 'mysql' ),
+			'expires_at'        => $data['expires_at'],
 		],
-		[ '%s', '%d', '%d', '%d', '%s', '%d', '%s', '%s' ]
+		[ '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s', '%s' ]
 	);
 
 	if ( ! $inserted ) {
-		return new WP_Error( 'rl_db_error', __( 'خطا در ذخیره لایسنس در دیتابیس.', 'readylicense' ) );
+		return new WP_Error( 'rl_db_insert_error', __( 'خطا در ذخیره‌سازی لایسنس در پایگاه داده.', 'readylicense' ) );
 	}
 
 	$license_id = $wpdb->insert_id;
 	
-	// ثبت لاگ
-	rl_log( $license_id, 'created', 'لایسنس جدید ایجاد شد.' );
+	// ثبت لاگ سیستمی
+	rl_log( $license_id, 'created', 'لایسنس جدید با موفقیت صادر شد.' );
 
 	return $license_id;
 }
@@ -90,8 +104,8 @@ function rl_create_license( $args = [] ) {
 /**
  * دریافت اطلاعات کامل یک لایسنس
  *
- * @param string|int $key_or_id کلید لایسنس یا شناسه
- * @return object|null
+ * @param string|int $key_or_id کلید لایسنس یا شناسه عددی آن
+ * @return object|null آبجکت لایسنس یا null در صورت عدم وجود
  */
 function rl_get_license( $key_or_id ) {
 	global $wpdb;
@@ -105,93 +119,108 @@ function rl_get_license( $key_or_id ) {
 }
 
 /**
- * فعال‌سازی لایسنس روی یک دامنه (Activation Logic)
- * این تابع توسط API صدا زده می‌شود.
+ * منطق اصلی فعال‌سازی لایسنس روی یک دامنه
+ * این تابع تمام قوانین (انقضا، وضعیت، تعداد نصب) را بررسی می‌کند.
  *
  * @param string $license_key کلید لایسنس
- * @param string $domain دامنه سایت کاربر
- * @return true|WP_Error
+ * @param string $domain دامنه سایت مقصد
+ * @return true|WP_Error در صورت موفقیت true و در غیر این صورت WP_Error
  */
 function rl_activate_license( $license_key, $domain ) {
 	global $wpdb;
 
+	// ۱. یافتن لایسنس
 	$license = rl_get_license( $license_key );
 
 	if ( ! $license ) {
-		return new WP_Error( 'rl_invalid_key', __( 'کلید لایسنس نامعتبر است.', 'readylicense' ) );
+		return new WP_Error( 'rl_invalid_key', __( 'لایسنس وارد شده نامعتبر است یا وجود ندارد.', 'readylicense' ) );
 	}
 
+	// ۲. بررسی وضعیت (Status)
 	if ( $license->status !== 'active' ) {
-		return new WP_Error( 'rl_inactive', __( 'این لایسنس غیرفعال یا مسدود شده است.', 'readylicense' ) );
+		return new WP_Error( 'rl_license_inactive', __( 'این لایسنس غیرفعال، مسدود یا تعلیق شده است.', 'readylicense' ) );
 	}
 
-	// بررسی انقضا
-	if ( $license->expires_at && strtotime( $license->expires_at ) < time() ) {
-		return new WP_Error( 'rl_expired', __( 'مدت اعتبار لایسنس به پایان رسیده است.', 'readylicense' ) );
+	// ۳. بررسی تاریخ انقضا (Expiration)
+	if ( ! empty( $license->expires_at ) && strtotime( $license->expires_at ) < time() ) {
+		return new WP_Error( 'rl_license_expired', __( 'مهلت اعتبار این لایسنس به پایان رسیده است.', 'readylicense' ) );
 	}
 
-	// نرمال‌سازی دامنه (حذف http و www)
+	// ۴. نرمال‌سازی و استانداردسازی دامنه
 	$clean_domain = rl_normalize_domain( $domain );
+	if ( empty( $clean_domain ) ) {
+		return new WP_Error( 'rl_invalid_domain', __( 'آدرس دامنه نامعتبر است.', 'readylicense' ) );
+	}
 
-	// بررسی اینکه آیا قبلاً روی این دامنه فعال شده؟
 	$table_activations = $wpdb->prefix . 'rl_activations';
-	$existing = $wpdb->get_row( $wpdb->prepare( 
-		"SELECT * FROM $table_activations WHERE license_id = %d AND domain = %s", 
+
+	// ۵. بررسی اینکه آیا قبلاً روی همین دامنه فعال شده؟
+	$existing_activation = $wpdb->get_row( $wpdb->prepare( 
+		"SELECT id FROM $table_activations WHERE license_id = %d AND domain = %s", 
 		$license->id, 
 		$clean_domain 
 	) );
 
-	if ( $existing ) {
-		// آپدیت زمان آخرین بررسی
+	if ( $existing_activation ) {
+		// اگر قبلاً فعال بوده، فقط زمان آخرین چک را آپدیت کن و موفقیت برگردان
 		$wpdb->update( 
 			$table_activations, 
-			[ 'last_check_at' => current_time( 'mysql' ), 'ip_address' => rl_get_ip() ], 
-			[ 'id' => $existing->id ] 
+			[ 
+				'last_check_at' => current_time( 'mysql' ), 
+				'ip_address'    => rl_get_ip() 
+			], 
+			[ 'id' => $existing_activation->id ] 
 		);
-		return true; // قبلاً فعال بوده، مشکلی نیست
+		return true;
 	}
 
-	// بررسی محدودیت تعداد نصب
-	// نکته: ما تعداد را از جدول اکتیویشن می‌شماریم تا دقیق باشد
-	$current_activations = $wpdb->get_var( $wpdb->prepare( 
-		"SELECT COUNT(*) FROM $table_activations WHERE license_id = %d", 
+	// ۶. بررسی محدودیت تعداد نصب (Activation Limit)
+	// نکته: تعداد را مستقیماً از جدول فعال‌سازی‌ها می‌شماریم تا دقیق باشد
+	$active_count = $wpdb->get_var( $wpdb->prepare( 
+		"SELECT COUNT(id) FROM $table_activations WHERE license_id = %d", 
 		$license->id 
 	) );
 
-	if ( $current_activations >= $license->activation_limit ) {
-		return new WP_Error( 'rl_limit_reached', __( 'تعداد نصب مجاز برای این لایسنس تکمیل شده است.', 'readylicense' ) );
+	if ( $active_count >= $license->activation_limit ) {
+		return new WP_Error( 'rl_limit_reached', sprintf( __( 'سقف نصب این لایسنس (%d دامنه) تکمیل شده است.', 'readylicense' ), $license->activation_limit ) );
 	}
 
-	// ثبت فعال‌سازی جدید
+	// ۷. ثبت فعال‌سازی جدید
 	$inserted = $wpdb->insert(
 		$table_activations,
 		[
 			'license_id'    => $license->id,
 			'domain'        => $clean_domain,
 			'ip_address'    => rl_get_ip(),
-			'platform'      => isset($_SERVER['HTTP_USER_AGENT']) ? substr($_SERVER['HTTP_USER_AGENT'], 0, 99) : 'Unknown',
+			'platform'      => isset($_SERVER['HTTP_USER_AGENT']) ? substr( $_SERVER['HTTP_USER_AGENT'], 0, 99 ) : 'Unknown',
 			'activated_at'  => current_time( 'mysql' ),
 			'last_check_at' => current_time( 'mysql' ),
-		]
+		],
+		[ '%d', '%s', '%s', '%s', '%s', '%s' ]
 	);
 
 	if ( $inserted ) {
-		// آپدیت تعداد استفاده در جدول اصلی (برای سرعت بیشتر در نمایش لیست‌ها)
+		// به‌روزرسانی شمارنده کش شده در جدول لایسنس‌ها (برای سرعت نمایش در پنل)
 		$wpdb->update( 
 			$wpdb->prefix . 'rl_licenses', 
-			[ 'activation_count' => $current_activations + 1 ], 
+			[ 'activation_count' => $active_count + 1 ], 
 			[ 'id' => $license->id ] 
 		);
 
-		rl_log( $license->id, 'activated', "فعال‌سازی روی دامنه $clean_domain" );
+		rl_log( $license->id, 'activated', "فعال‌سازی موفق روی دامنه: $clean_domain" );
 		return true;
 	}
 
-	return new WP_Error( 'rl_db_error', __( 'خطای پایگاه داده هنگام فعال‌سازی.', 'readylicense' ) );
+	return new WP_Error( 'rl_activation_failed', __( 'خطای سیستمی در ثبت فعال‌سازی.', 'readylicense' ) );
 }
 
 /**
- * غیرفعال‌سازی لایسنس (Deactivation) - حذف دامنه
+ * غیرفعال‌سازی لایسنس (حذف دامنه)
+ * معمولاً توسط کاربر از پنل کاربری یا توسط ادمین انجام می‌شود.
+ *
+ * @param int $license_id شناسه لایسنس
+ * @param string $domain دامنه مورد نظر برای حذف
+ * @return bool نتیجه عملیات
  */
 function rl_deactivate_license( $license_id, $domain ) {
 	global $wpdb;
@@ -199,7 +228,7 @@ function rl_deactivate_license( $license_id, $domain ) {
 	$clean_domain = rl_normalize_domain( $domain );
 	$table = $wpdb->prefix . 'rl_activations';
 
-	// حذف رکورد فعال‌سازی
+	// حذف رکورد
 	$deleted = $wpdb->delete( 
 		$table, 
 		[ 'license_id' => $license_id, 'domain' => $clean_domain ], 
@@ -207,13 +236,13 @@ function rl_deactivate_license( $license_id, $domain ) {
 	);
 
 	if ( $deleted ) {
-		// کاهش کانتر در جدول اصلی
+		// کاهش شمارنده
 		$wpdb->query( $wpdb->prepare( 
-			"UPDATE {$wpdb->prefix}rl_licenses SET activation_count = activation_count - 1 WHERE id = %d AND activation_count > 0", 
+			"UPDATE {$wpdb->prefix}rl_licenses SET activation_count = GREATEST(0, activation_count - 1) WHERE id = %d", 
 			$license_id 
 		) );
 		
-		rl_log( $license_id, 'deactivated', "حذف دامنه $clean_domain توسط کاربر" );
+		rl_log( $license_id, 'deactivated', "دامنه $clean_domain غیرفعال (حذف) شد." );
 		return true;
 	}
 
@@ -221,39 +250,59 @@ function rl_deactivate_license( $license_id, $domain ) {
 }
 
 /**
- * ابزار: تمیز کردن آدرس دامنه
- * تبدیل https://www.example.com/folder به example.com
+ * ابزار: نرمال‌سازی دامنه
+ * ورودی‌های مختلف (http, https, www, subfolder) را به فرمت استاندارد domain.com تبدیل می‌کند.
  */
 function rl_normalize_domain( $url ) {
 	$url = strtolower( trim( $url ) );
-	// حذف پروتکل
-	$url = preg_replace( '#^https?://#', '', $url );
-	// حذف www
-	$url = preg_replace( '#^www\.#', '', $url );
-	// حذف مسیرهای اضافی و کوئری استرینگ
-	$url = explode( '/', $url )[0];
-	$url = explode( ':', $url )[0]; // حذف پورت اگر باشد
 	
-	return $url;
+	// حذف پروتکل
+	if ( strpos( $url, 'http://' ) === 0 ) {
+		$url = substr( $url, 7 );
+	} elseif ( strpos( $url, 'https://' ) === 0 ) {
+		$url = substr( $url, 8 );
+	}
+
+	// حذف www
+	if ( strpos( $url, 'www.' ) === 0 ) {
+		$url = substr( $url, 4 );
+	}
+
+	// حذف مسیرهای اضافی (فقط هاست اصلی مهم است)
+	$url_parts = explode( '/', $url );
+	$domain = $url_parts[0];
+
+	// حذف پورت (اگر وجود داشته باشد مثل localhost:8000)
+	$domain_parts = explode( ':', $domain );
+	$domain = $domain_parts[0];
+
+	return $domain;
 }
 
 /**
- * ابزار: دریافت IP واقعی کاربر
+ * ابزار: دریافت آدرس IP واقعی کاربر
+ * با پشتیبانی از کلودفلر و پروکسی‌ها.
  */
 function rl_get_ip() {
-	if ( ! empty( $_SERVER['HTTP_CLIENT_IP'] ) ) {
-		return $_SERVER['HTTP_CLIENT_IP'];
+	$ip = '0.0.0.0';
+
+	if ( ! empty( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ) {
+		$ip = $_SERVER['HTTP_CF_CONNECTING_IP']; // کلودفلر
+	} elseif ( ! empty( $_SERVER['HTTP_CLIENT_IP'] ) ) {
+		$ip = $_SERVER['HTTP_CLIENT_IP'];
 	} elseif ( ! empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
-		// ممکن است چند IP باشد، اولی را برمی‌داریم
 		$ips = explode( ',', $_SERVER['HTTP_X_FORWARDED_FOR'] );
-		return trim( $ips[0] );
-	} else {
-		return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+		$ip = trim( $ips[0] );
+	} elseif ( ! empty( $_SERVER['REMOTE_ADDR'] ) ) {
+		$ip = $_SERVER['REMOTE_ADDR'];
 	}
+
+	return filter_var( $ip, FILTER_VALIDATE_IP ) ? $ip : '0.0.0.0';
 }
 
 /**
- * سیستم لاگ‌برداری حرفه‌ای
+ * ابزار: سیستم لاگ‌برداری مرکزی
+ * ثبت وقایع در جدول rl_logs برای پیگیری‌های بعدی.
  */
 function rl_log( $license_id, $action, $message = '', $ip = '' ) {
 	global $wpdb;
@@ -262,15 +311,18 @@ function rl_log( $license_id, $action, $message = '', $ip = '' ) {
 		$ip = rl_get_ip();
 	}
 
+	$user_id = is_user_logged_in() ? get_current_user_id() : 0;
+
 	$wpdb->insert(
 		$wpdb->prefix . 'rl_logs',
 		[
 			'license_id' => $license_id,
-			'user_id'    => get_current_user_id(),
+			'user_id'    => $user_id,
 			'action'     => $action,
 			'message'    => $message,
 			'ip_address' => $ip,
 			'created_at' => current_time( 'mysql' ),
-		]
+		],
+		[ '%d', '%d', '%s', '%s', '%s', '%s' ]
 	);
 }

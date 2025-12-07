@@ -1,8 +1,11 @@
 <?php
 /**
- * مدیریت REST API برای اتصال از راه دور
+ * مدیریت REST API برای ارتباط با سایت‌های کلاینت
+ *
+ * این کلاس درخواست‌های از راه دور (Remote Requests) را دریافت، اعتبارسنجی و پردازش می‌کند.
  *
  * @package ReadyLicense
+ * @version 2.0.2
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -12,13 +15,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 class ReadyLicense_API {
 
 	/**
-	 * فضای نام API
-	 * این قسمت باید با آدرس درخواستی شما هماهنگ باشد: wp-json/readylicense/v1
+	 * فضای نام API (Namespace)
+	 * تمام درخواست‌ها با پیشوند /wp-json/readylicense/v1/ شروع می‌شوند.
 	 */
 	const NAMESPACE = 'readylicense/v1';
 
 	/**
-	 * راه‌اندازی کلاس
+	 * راه‌اندازی کلاس و ثبت هوک‌ها
 	 */
 	public function __construct() {
 		add_action( 'rest_api_init', [ $this, 'register_routes' ] );
@@ -30,15 +33,17 @@ class ReadyLicense_API {
 	public function register_routes() {
 		
 		// 1. بررسی وضعیت لایسنس (Check)
-		// آدرس: POST /wp-json/readylicense/v1/check
+		// متد: POST
+		// مسیر: /wp-json/readylicense/v1/check
 		register_rest_route( self::NAMESPACE, '/check', [
 			'methods'             => 'POST',
 			'callback'            => [ $this, 'check_license' ],
-			'permission_callback' => '__return_true', // عمومی است چون سایت مشتری کوکی ادمین ندارد
+			'permission_callback' => '__return_true', // عمومی (لایسنس خودش کلید احراز هویت است)
 		] );
 
 		// 2. فعال‌سازی لایسنس (Activate)
-		// آدرس: POST /wp-json/readylicense/v1/activate
+		// متد: POST
+		// مسیر: /wp-json/readylicense/v1/activate
 		register_rest_route( self::NAMESPACE, '/activate', [
 			'methods'             => 'POST',
 			'callback'            => [ $this, 'activate_license' ],
@@ -46,7 +51,8 @@ class ReadyLicense_API {
 		] );
 
 		// 3. غیرفعال‌سازی لایسنس (Deactivate)
-		// آدرس: POST /wp-json/readylicense/v1/deactivate
+		// متد: POST
+		// مسیر: /wp-json/readylicense/v1/deactivate
 		register_rest_route( self::NAMESPACE, '/deactivate', [
 			'methods'             => 'POST',
 			'callback'            => [ $this, 'deactivate_license' ],
@@ -55,52 +61,52 @@ class ReadyLicense_API {
 	}
 
 	/**
-	 * متد: بررسی وضعیت لایسنس
-	 * پارامترها: license_key, domain
+	 * پردازش درخواست بررسی لایسنس (Check)
+	 * این متد بررسی می‌کند که آیا لایسنس معتبر است و آیا روی دامنه درخواست‌دهنده فعال شده است یا خیر.
 	 */
 	public function check_license( $request ) {
-		$params = $request->get_params();
-		
-		// پشتیبانی از هر دو حالت ارسال (JSON Body یا Form Data)
+		$params      = $request->get_params();
 		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
 		$domain      = esc_url_raw( $params['domain'] ?? '' );
 
-		// 1. بررسی پارامترها
+		// ۱. اعتبارسنجی ورودی‌ها
 		if ( empty( $license_key ) || empty( $domain ) ) {
 			return $this->response( false, 'missing_params', 'کلید لایسنس و آدرس دامنه الزامی است.' );
 		}
 
-		// 2. یافتن لایسنس
+		// ۲. دریافت اطلاعات لایسنس از دیتابیس
 		$license = rl_get_license( $license_key );
 
 		if ( ! $license ) {
-			return $this->response( false, 'invalid_license', 'لایسنس یافت نشد یا نامعتبر است.' );
+			return $this->response( false, 'invalid_license', 'لایسنس یافت نشد یا نامعتبر است.', [], 404 );
 		}
 
-		// 3. بررسی وضعیت کلی لایسنس
+		// ۳. بررسی وضعیت کلی (Status)
 		if ( $license->status !== 'active' ) {
-			return $this->response( false, 'license_blocked', 'این لایسنس مسدود یا غیرفعال شده است.' );
+			return $this->response( false, 'license_inactive', 'این لایسنس مسدود یا غیرفعال شده است.' );
 		}
 
-		// 4. بررسی تاریخ انقضا
-		if ( $license->expires_at && strtotime( $license->expires_at ) < time() ) {
+		// ۴. بررسی تاریخ انقضا
+		if ( ! empty( $license->expires_at ) && strtotime( $license->expires_at ) < time() ) {
 			return $this->response( false, 'license_expired', 'مدت اعتبار لایسنس به پایان رسیده است.' );
 		}
 
-		// 5. بررسی تطابق دامنه
+		// ۵. بررسی تطابق دامنه (مهم‌ترین بخش)
+		// آیا این لایسنس قبلاً برای این دامنه در سیستم ثبت شده است؟
 		$clean_domain = rl_normalize_domain( $domain );
 		global $wpdb;
 		$activation = $wpdb->get_row( $wpdb->prepare(
-			"SELECT * FROM {$wpdb->prefix}rl_activations WHERE license_id = %d AND domain = %s",
+			"SELECT id FROM {$wpdb->prefix}rl_activations WHERE license_id = %d AND domain = %s",
 			$license->id,
 			$clean_domain
 		) );
 
 		if ( ! $activation ) {
-			return $this->response( false, 'domain_mismatch', 'این لایسنس برای دامنه ارسالی فعال نشده است.' );
+			// اگر ثبت نشده باشد، یعنی لایسنس معتبر است اما روی این سایت فعال نشده
+			return $this->response( false, 'domain_mismatch', 'این لایسنس برای دامنه فعلی فعال نشده است. لطفاً ابتدا آن را فعال کنید.' );
 		}
 
-		// 6. آپدیت زمان آخرین بررسی (برای آمارگیری مدیر)
+		// ۶. به‌روزرسانی زمان آخرین بررسی (Telemetry)
 		$wpdb->update(
 			$wpdb->prefix . 'rl_activations',
 			[ 
@@ -110,17 +116,18 @@ class ReadyLicense_API {
 			[ 'id' => $activation->id ]
 		);
 
+		// ۷. ارسال پاسخ موفقیت‌آمیز
 		return $this->response( true, 'valid', 'لایسنس معتبر است.', [
 			'expires_at' => $license->expires_at,
-			'holder'     => 'Customer',
+			'holder'     => 'Customer', // می‌توان نام کاربر را هم برگرداند
 		] );
 	}
 
 	/**
-	 * متد: فعال‌سازی لایسنس (از راه دور)
+	 * پردازش درخواست فعال‌سازی (Activate)
 	 */
 	public function activate_license( $request ) {
-		$params = $request->get_params();
+		$params      = $request->get_params();
 		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
 		$domain      = esc_url_raw( $params['domain'] ?? '' );
 
@@ -128,21 +135,22 @@ class ReadyLicense_API {
 			return $this->response( false, 'missing_params', 'پارامترهای ضروری ارسال نشده‌اند.' );
 		}
 
-		// استفاده از تابع مرکزی فعال‌سازی
+		// استفاده از تابع مرکزی rl_activate_license که همه قوانین را چک می‌کند
 		$result = rl_activate_license( $license_key, $domain );
 
 		if ( is_wp_error( $result ) ) {
+			// در صورت خطا، کد خطا و پیام فارسی را برمی‌گردانیم
 			return $this->response( false, $result->get_error_code(), $result->get_error_message() );
 		}
 
-		return $this->response( true, 'active', 'لایسنس با موفقیت فعال شد.' );
+		return $this->response( true, 'active', 'لایسنس با موفقیت روی این دامنه فعال شد.' );
 	}
 
 	/**
-	 * متد: غیرفعال‌سازی لایسنس (از راه دور)
+	 * پردازش درخواست غیرفعال‌سازی (Deactivate)
 	 */
 	public function deactivate_license( $request ) {
-		$params = $request->get_params();
+		$params      = $request->get_params();
 		$license_key = sanitize_text_field( $params['license_key'] ?? '' );
 		$domain      = esc_url_raw( $params['domain'] ?? '' );
 
@@ -162,18 +170,26 @@ class ReadyLicense_API {
 	}
 
 	/**
-	 * ساخت پاسخ استاندارد JSON
+	 * ساختار استاندارد پاسخ JSON
+	 * تمام پاسخ‌های API (موفق یا ناموفق) باید این فرمت را داشته باشند.
+	 *
+	 * @param bool $success وضعیت موفقیت
+	 * @param string $code کد وضعیت (برای توسعه‌دهنده)
+	 * @param string $message پیام قابل نمایش به کاربر
+	 * @param array $data داده‌های اضافی
+	 * @param int $http_code کد HTTP
+	 * @return WP_REST_Response
 	 */
-	private function response( $success, $code, $message, $extra_data = [] ) {
-		$data = array_merge( [
+	private function response( $success, $code, $message, $data = [], $http_code = 200 ) {
+		$response_data = array_merge( [
 			'success' => $success,
 			'code'    => $code,
 			'message' => $message,
 			'data'    => [
 				'status' => $success ? 200 : 400
 			]
-		], $extra_data );
+		], $data );
 
-		return new WP_REST_Response( $data, 200 );
+		return new WP_REST_Response( $response_data, $http_code );
 	}
 }

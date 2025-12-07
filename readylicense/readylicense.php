@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       ReadyLicense
  * Plugin URI:        https://readystudio.ir/readylicense/
- * Description:       سامانه جامع مدیریت لایسنس، محافظت از کد و فروش محصولات دیجیتال در ووکامرس (نسخه حرفه‌ای).
- * Version:           2.0.1
+ * Description:       سامانه جامع مدیریت لایسنس، محافظت از کد و فروش محصولات دیجیتال در ووکامرس (نسخه سازمانی).
+ * Version:           2.0.2
  * Author:            ReadyStudio
  * Author URI:        https://readystudio.ir
  * Text Domain:       readylicense
@@ -12,17 +12,17 @@
  * Requires PHP:      7.4
  */
 
-// جلوگیری از دسترسی مستقیم برای امنیت
+// امنیت: جلوگیری از دسترسی مستقیم به فایل
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
 /**
  * کلاس اصلی افزونه ReadyLicense
- * پیاده‌سازی شده با الگوی Singleton برای اطمینان از پایداری و بهینگی مصرف حافظه.
+ * مسئول راه‌اندازی، مدیریت وابستگی‌ها و تعریف ساختار کلی سیستم.
  *
  * @package ReadyLicense
- * @since 2.0.1
+ * @version 2.0.2
  */
 final class ReadyLicense {
 
@@ -30,7 +30,7 @@ final class ReadyLicense {
 	 * نسخه فعلی افزونه
 	 * @var string
 	 */
-	public $version = '2.0.1';
+	public $version = '2.0.2';
 
 	/**
 	 * نمونه یگانه کلاس (Singleton Instance)
@@ -40,7 +40,7 @@ final class ReadyLicense {
 
 	/**
 	 * دسترسی به نمونه اصلی کلاس
-	 * این متد تضمین می‌کند که تنها یک نمونه از این کلاس در کل طول عمر اجرای اسکریپت وجود داشته باشد.
+	 * این متد تضمین می‌کند که تنها یک نمونه از این کلاس در حافظه وجود دارد.
 	 *
 	 * @return ReadyLicense
 	 */
@@ -53,7 +53,7 @@ final class ReadyLicense {
 
 	/**
 	 * سازنده کلاس
-	 * اجرای متدهای راه‌اندازی به ترتیب اولویت و وابستگی.
+	 * اجرای متدهای راه‌اندازی به ترتیب اولویت.
 	 */
 	public function __construct() {
 		$this->define_constants();
@@ -71,45 +71,46 @@ final class ReadyLicense {
 		define( 'RL_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 		define( 'RL_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 		define( 'RL_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
-		define( 'RL_API_NAMESPACE', 'readylicense/v1' ); // فضای نام API
+		define( 'RL_API_NAMESPACE', 'readylicense/v1' ); // فضای نام استاندارد API
 		
-		// لینک‌های پشتیبانی و مستندات طبق درخواست شما
+		// لینک‌های پشتیبانی و مستندات
 		define( 'RL_DOCS_URL', 'https://readystudio.ir/readylicense/doc' );
 		define( 'RL_SUPPORT_URL', 'https://readystudio.ir/support' );
 	}
 
 	/**
 	 * بارگذاری فایل‌های هسته و کلاس‌ها
-	 * فایل‌ها فقط زمانی که نیاز باشند لود می‌شوند (Performance Tuning).
+	 * ترتیب بارگذاری بسیار مهم است: ابتدا توابع، سپس کلاس‌های پایه، سپس منطق‌ها.
 	 */
 	private function includes() {
 		/**
 		 * 1. توابع کمکی (Helper Functions)
-		 * توابعی که در سراسر افزونه (ادمین و فرانت) استفاده می‌شوند.
+		 * شامل توابع کار با دیتابیس، تولید کلید، لاگ‌برداری و ...
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/rl-functions.php';
 
 		/**
 		 * 2. کلاس فعال‌سازی (Activator)
-		 * مدیریت ساخت جداول دیتابیس و به‌روزرسانی‌ها.
+		 * مسئول ساخت جداول دیتابیس و مدیریت ارتقای نسخه.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-activator.php';
 
 		/**
 		 * 3. هسته API (REST API Handler)
-		 * مدیریت درخواست‌های از راه دور برای چک کردن لایسنس.
+		 * مدیریت درخواست‌های از راه دور (مثل چک کردن لایسنس توسط قالب‌ها).
+		 * این فایل باید همیشه لود شود تا اندپوینت‌ها در دسترس باشند.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-api.php';
 
 		/**
 		 * 4. مدیریت درخواست‌های AJAX
-		 * پردازش عملیات بدون رفرش (مثل تولید لایسنس، مدیریت دامین).
+		 * پردازش عملیات‌های بدون رفرش (مثل ثبت دامین، تولید لایسنس).
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-ajax.php';
 
 		/**
 		 * 5. کلاس‌های سمت کاربر (Frontend)
-		 * مدیریت نمایش تب لایسنس‌ها در حساب کاربری ووکامرس.
+		 * مدیریت پنل کاربری در حساب کاربری ووکامرس.
 		 */
 		require_once RL_PLUGIN_DIR . 'includes/class-rl-frontend.php';
 
@@ -127,10 +128,10 @@ final class ReadyLicense {
 	 * این بخش موتورهای داخلی افزونه را روشن می‌کند.
 	 */
 	private function instantiate_classes() {
-		// راه‌اندازی مسیرهای API (همیشه باید اجرا شود تا 404 ندهد)
+		// راه‌اندازی مسیرهای API
 		new ReadyLicense_API();
 
-		// راه‌اندازی هندلر AJAX (برای پردازش درخواست‌های ناهمگام)
+		// راه‌اندازی هندلر AJAX
 		new ReadyLicense_Ajax();
 
 		// راه‌اندازی بخش کاربری (My Account)
@@ -174,15 +175,15 @@ final class ReadyLicense {
 
 	/**
 	 * بارگذاری دارایی‌های سمت مدیریت (CSS/JS)
-	 * فقط در صفحه مربوط به ReadyLicense اجرا می‌شود تا تداخل ایجاد نکند.
+	 * فقط در صفحه مربوط به ReadyLicense اجرا می‌شود تا تداخل با سایر افزونه‌ها ایجاد نکند.
 	 */
 	public function enqueue_admin_assets( $hook ) {
-		// فقط در صفحه خود افزونه لود شو! (برای جلوگیری از کندی پیشخوان)
+		// شرط بررسی صفحه: فقط اگر در صفحه readylicense هستیم
 		if ( strpos( $hook, 'readylicense' ) === false ) {
 			return;
 		}
 
-		// استایل‌های ادمین (نسخه جدید و بهینه)
+		// استایل‌های ادمین (نسخه جدید)
 		wp_enqueue_style( 
 			'rl-admin-css', 
 			RL_PLUGIN_URL . 'assets/css/admin-styles.css', 
@@ -200,7 +201,6 @@ final class ReadyLicense {
 		);
 
 		// ارسال داده‌ها به JS (برای AJAX و ترجمه‌ها)
-		// این آبجکت rl_obj در فایل admin-scripts.js استفاده می‌شود
 		wp_localize_script( 'rl-admin-js', 'rl_obj', [
 			'ajax_url' => admin_url( 'admin-ajax.php' ),
 			'nonce'    => wp_create_nonce( 'rl_admin_nonce' ),
@@ -246,7 +246,6 @@ final class ReadyLicense {
 		);
 		
 		// ارسال داده‌ها به JS فرانت
-		// این آبجکت rl_front در فایل user-script.js استفاده می‌شود
 		wp_localize_script( 'rl-user-js', 'rl_front', [
 			'ajax_url' => admin_url( 'admin-ajax.php' ),
 			'nonce'    => wp_create_nonce( 'rl_user_nonce' ),
@@ -261,14 +260,14 @@ final class ReadyLicense {
 	 * جلوگیری از کلون شدن کلاس (Singleton Protection)
 	 */
 	public function __clone() {
-		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '2.0.1' );
+		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '2.0.2' );
 	}
 
 	/**
 	 * جلوگیری از Unserialize شدن کلاس (Singleton Protection)
 	 */
 	public function __wakeup() {
-		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '2.0.1' );
+		_doing_it_wrong( __FUNCTION__, __( 'Cheatin&#8217; huh?', 'readylicense' ), '2.0.2' );
 	}
 }
 
